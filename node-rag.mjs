@@ -1,129 +1,48 @@
 import {fileURLToPath} from "url";
 import path from "path";
 
-import { TextLoader } from "langchain/document_loaders/fs/text";
-import { DirectoryLoader } from "langchain/document_loaders/fs/directory";
-import { MarkdownTextSplitter } from "langchain/text_splitter";
-import { MemoryVectorStore } from "langchain/vectorstores/memory";
-
-import { HuggingFaceTransformersEmbeddings } from "@langchain/community/embeddings/hf_transformers";
-
-import { createRetrievalChain } from "langchain/chains/retrieval";
-import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
 
 
-////////////////////////////////
-// LOAD AUGMENTING DATA
-// typically this is stored in a database versus being loaded every time
+import yargs from 'yargs/yargs';
+import { hideBin } from 'yargs/helpers';
+import Log from './src/logger.mjs';
+const log = new Log('node-rag.log');
 
-console.log("Loading and processing augmenting data - " + new Date());
+import { getModel, getAugmentedData, getChain } from './src/model.mjs';
+import { getPrompt } from './src/prompt.mjs';
 
-const docLoader = new DirectoryLoader(
-  "./SOURCE_DOCUMENTS",
-  {
-    ".md": (path) => new TextLoader(path),
-  }
-);
-const docs = await docLoader.load();
+const { argv } = yargs(hideBin(process.argv))
+  .option('question', {
+    alias: 'q',
+    type: 'string',
+    description: 'The question to ask the model',
+    'default': 'How do I build a good container for a Node.js application'
+  })
+  .option('directory', {
+    alias: 'd',
+    type: 'string',
+    description: 'The directory containing the source documents',
+  })
+  .help()
+  .alias('help', 'h');
 
-const splitter = await new MarkdownTextSplitter({
-  chunkSize: 500,
-  chunkOverlap: 50
-});
-const splitDocs = await splitter.splitDocuments(docs);
+const {
+  question,
+  directory,
+} = argv;
 
-const vectorStore = await MemoryVectorStore.fromDocuments(
-  splitDocs,
-  new HuggingFaceTransformersEmbeddings()
-);
-const retriever = await vectorStore.asRetriever();
+const hasContext = !!directory;
 
-console.log("Augmenting data loaded - " + new Date());
-
-////////////////////////////////
-// GET THE MODEL
+const prompt = getPrompt(hasContext);
 const model = await getModel('llama-cpp');
+const chain = await getChain(prompt, model, directory);
 
-////////////////////////////////
-// CREATE CHAIN
-
-const prompt =
-  ChatPromptTemplate.fromTemplate(`Answer the following question based only on the provided context, if you don't know the answer say so:
-
-<context>
-{context}
-</context>
-
-Question: {input}`);
-
-const documentChain = await createStuffDocumentsChain({
-  llm: model,
-  prompt,
+let result = await chain.invoke({
+  input: question,
 });
 
-const retrievalChain = await createRetrievalChain({
-  combineDocsChain: documentChain,
-  retriever,
-});
+const resultMessage = result?.answer || result;
 
-////////////////////////////////
-// ASK QUESTIONS
-
-console.log(new Date());
-let result = await retrievalChain.invoke({
-  input: "Should I use npm to start a node.js application",
-});
-console.log(result);
-console.log(new Date());
-
-result = await retrievalChain.invoke({
-  input: "How do I build a good container for a Node.js application",
-});
-console.log(result);
-console.log(new Date());
-
-/////////////////////////////////////////////////
-// HELPER FUNCTIONS
-async function getModel(type) {
-  console.log("Loading model - " + new Date());
-
-  let model;
-  if (type === 'llama-cpp') {
-    ////////////////////////////////
-    // LOAD MODEL
-    const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const modelPath = path.join(__dirname, "models", "mistral-7b-instruct-v0.1.Q5_K_M.gguf")
-    //const modelPath = path.join(__dirname, "models", "llama-2-7b-chat.Q4_K_M.gguf");
-    const { LlamaCpp } = await import("@langchain/community/llms/llama_cpp");
-    model = await new LlamaCpp({ modelPath: modelPath,
-                                 batchSize: 1024,
-                                 temperature: 0.9,
-                                 gpuLayers: 64 });
-  } else if (type === 'openAI') {
-    ////////////////////////////////
-    // Connect to OpenAPI
-    const { ChatOpenAI } = await import("@langchain/openai");
-    const key = await import('../key.json', { with: { type: 'json' } });
-    model = new ChatOpenAI({
-      temperature: 0.9,
-      openAIApiKey: key.default.apiKey
-    });
-  } else if (type === 'Openshift.ai') {
-    ////////////////////////////////
-    // Connect to OpenShift.ai endpoint
-    const { ChatOpenAI } = await import("@langchain/openai");
-    model = new ChatOpenAI(
-      { temperature: 0.9,
-        openAIApiKey: 'EMPTY',
-        modelName: 'mistralai/Mistral-7B-Instruct-v0.2' },
-      { baseURL: 'http://vllm.llm-hosting.svc.cluster.local:8000/v1' }
-    );
-
-    setInterval(() => {
-      console.log('keep-alive');
-    }, 5000);
-  };
-
-  return model;
-};
+await log
+  .toConsole(resultMessage, true)
+  .infoToFileAsync(result);

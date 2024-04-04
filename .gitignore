@@ -1,0 +1,5 @@
+SOURCE_DOCUMENTS
+models
+*.log
+node_modules
+.DS_Store
