@@ -8,29 +8,43 @@ import { MarkdownTextSplitter } from "langchain/text_splitter";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { HuggingFaceTransformersEmbeddings } from "@langchain/community/embeddings/hf_transformers";
 
-import { MODEL_DIRECTORY, LLAMA_MODEL } from './constants.mjs';
+import {
+    MODEL_DIRECTORY,
+    LLAMA_MODEL,
+    OPENSHIFT_MODEL,
+    DEFAULT_TEMPERATURE,
+} from './constants.mjs';
 import Log from './logger.mjs';
 import { get } from 'http';
 const log = new Log('node-rag.log');
 
-export async function getLlamaModel(rootPath = process.cwd(), modelDirectory = MODEL_DIRECTORY, llamaModel = LLAMA_MODEL) {
+/**
+ * @param  {string} rootPath=process.cwd(
+ * @param  {string} modelDirectory=MODEL_DIRECTORY
+ * @param  {string} modelName=LLAMA_MODEL
+ * @param  {number} temperature=DEFAULT_TEMPERATURE
+ */
+export async function getLlamaModel(rootPath = process.cwd(), modelDirectory = MODEL_DIRECTORY, modelName = LLAMA_MODEL, temperature = DEFAULT_TEMPERATURE) {
     await log
         .toConsole('Loading model', false, true)
         .infoToFileAsync();
 
-    const modelPath = path.join(rootPath, modelDirectory, llamaModel);
+    const modelPath = path.join(rootPath, modelDirectory, modelName);
     const { LlamaCpp } = await import("@langchain/community/llms/llama_cpp");
     const model = await new LlamaCpp({
         modelPath: modelPath,
         batchSize: 1024,
-        temperature: 0.9,
+        temperature: temperature,
         gpuLayers: 64
     });
 
     return model;
 }
 
-export async function getOpenAIModel() {
+/**
+ * @param  {number} temperature=DEFAULT_TEMPERATURE
+ */
+export async function getOpenAIModel(temperature = DEFAULT_TEMPERATURE) {
     await log
         .toConsole('Loading model', false, true)
         .infoToFileAsync();
@@ -38,20 +52,24 @@ export async function getOpenAIModel() {
     const { ChatOpenAI } = await import("@langchain/openai");
     const key = await import('../key.json', { with: { type: 'json' } });
     const model = new ChatOpenAI({
-        temperature: 0.9,
+        temperature: temperature,
         openAIApiKey: key.default.apiKey
     });
 
     return model;
 }
 
-export async function getOpenShiftAiModel() {
+/**
+ * @param  {string} modelName=OPENSHIFT_MODEL
+ * @param  {number} temperature=DEFAULT_TEMPERATURE
+ */
+export async function getOpenShiftAiModel(modelName = OPENSHIFT_MODEL, temperature = DEFAULT_TEMPERATURE) {
     const { ChatOpenAI } = await import("@langchain/openai");
     model = new ChatOpenAI(
         {
-            temperature: 0.9,
+            temperature,
+            modelName,
             openAIApiKey: 'EMPTY',
-            modelName: 'mistralai/Mistral-7B-Instruct-v0.2'
         },
         { baseURL: 'http://vllm.llm-hosting.svc.cluster.local:8000/v1' }
     );
@@ -60,21 +78,22 @@ export async function getOpenShiftAiModel() {
 }
 
 /**
- * @param  {'llama-cpp'|'openAI'|'Openshift.ai'} modelType
+ * @param  {'llama-cpp'|'openAI'|'Openshift.ai'} modelType\
+ * @param  {number} temperature=DEFAULT_TEMPERATURE
  * @returns {Promise<any>} either a llama model, an openAI model, or an Openshift.ai model
  */
-export async function getModel(modelType) {
+export async function getModel(modelType, temperature = DEFAULT_TEMPERATURE) {
     await log
         .toConsole('Loading model', false, true)
         .infoToFileAsync();
 
     let model;
     if (modelType === 'llama-cpp') {
-        model = await getLlamaModel();
+        model = await getLlamaModel(process.cwd(), MODEL_DIRECTORY, LLAMA_MODEL, temperature);
     } else if (modelType === 'openAI') {
-        model = await getOpenAIModel();
+        model = await getOpenAIModel(DEFAULT_TEMPERATURE);
     } else if (modelType === 'Openshift.ai') {
-        model = await getOpenShiftAiModel();
+        model = await getOpenShiftAiModel(OPENSHIFT_MODEL, DEFAULT_TEMPERATURE);
         setInterval(() => {
             console.log('keep-alive');
         }, 5000);
